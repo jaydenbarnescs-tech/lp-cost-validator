@@ -4,13 +4,15 @@ import { useState, useMemo, useEffect } from 'react'
 // ============================================================
 // TYPES
 // ============================================================
+type Billing = 'one_time' | 'monthly' | 'yearly'
 type CostType = 'fixed' | 'per_client'
 
 type CostItem = {
   id: string
   name: string
   category: string
-  monthlyJpy: number
+  amountJpy: number
+  billing: Billing
   type: CostType
 }
 
@@ -18,7 +20,7 @@ type Scenario = {
   id: string
   name: string
   monthlyFeePerClient: number
-  initialBuildCost: number
+  initialFeeFromClient: number
   contractMonths: number
   costs: CostItem[]
   notes?: string
@@ -27,9 +29,16 @@ type Scenario = {
 }
 
 // ============================================================
+// CONSTANTS
+// ============================================================
+// 固定コストを按分する想定クライアント数（MGCの目標運用規模）
+const ASSUMED_CLIENT_SHARE = 50
+
+// ============================================================
 // CATEGORIES & TOOL LIBRARY
 // ============================================================
 const CATS = {
+  labor: '人件費・労務',
   hosting: 'ホスティング',
   cms: 'CMS',
   db: 'データベース',
@@ -39,35 +48,42 @@ const CATS = {
 } as const
 
 const LIB: Omit<CostItem, 'id'>[] = [
+  // Labor (one-time)
+  { name: '人件費 - 小規模LP（AI支援）', category: CATS.labor, amountJpy: 40000, billing: 'one_time', type: 'per_client' },
+  { name: '人件費 - 中規模LP（AI支援）', category: CATS.labor, amountJpy: 80000, billing: 'one_time', type: 'per_client' },
+  { name: '人件費 - 小規模LP（従来開発）', category: CATS.labor, amountJpy: 100000, billing: 'one_time', type: 'per_client' },
+  { name: '人件費 - 中規模LP（従来開発）', category: CATS.labor, amountJpy: 200000, billing: 'one_time', type: 'per_client' },
+  { name: '運用工数（月次サポート）', category: CATS.labor, amountJpy: 1500, billing: 'monthly', type: 'per_client' },
   // Hosting
-  { name: 'Vercel Hobby (個人用のみ)', category: CATS.hosting, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Vercel Pro (月払い)', category: CATS.hosting, monthlyJpy: 3000, type: 'fixed' },
-  { name: 'Vercel Pro (年契約)', category: CATS.hosting, monthlyJpy: 2500, type: 'fixed' },
-  { name: 'Cloudflare Pages', category: CATS.hosting, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Netlify Starter', category: CATS.hosting, monthlyJpy: 0, type: 'fixed' },
+  { name: 'Vercel Hobby (個人用のみ)', category: CATS.hosting, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Vercel Pro (月払い)', category: CATS.hosting, amountJpy: 3000, billing: 'monthly', type: 'fixed' },
+  { name: 'Vercel Pro (年契約)', category: CATS.hosting, amountJpy: 30000, billing: 'yearly', type: 'fixed' },
+  { name: 'Cloudflare Pages', category: CATS.hosting, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Netlify Starter', category: CATS.hosting, amountJpy: 0, billing: 'monthly', type: 'fixed' },
   // CMS
-  { name: 'Sanity Free', category: CATS.cms, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Sanity Growth (1 seat)', category: CATS.cms, monthlyJpy: 2250, type: 'fixed' },
-  { name: 'Storyblok Starter', category: CATS.cms, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Storyblok Entry', category: CATS.cms, monthlyJpy: 14850, type: 'fixed' },
-  { name: 'Payload (セルフホスト)', category: CATS.cms, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Strapi Community', category: CATS.cms, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Contentful Free', category: CATS.cms, monthlyJpy: 0, type: 'fixed' },
+  { name: 'Sanity Free', category: CATS.cms, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Sanity Growth (1 seat)', category: CATS.cms, amountJpy: 2250, billing: 'monthly', type: 'fixed' },
+  { name: 'Storyblok Starter', category: CATS.cms, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Storyblok Entry', category: CATS.cms, amountJpy: 14850, billing: 'monthly', type: 'fixed' },
+  { name: 'Payload (セルフホスト)', category: CATS.cms, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Strapi Community', category: CATS.cms, amountJpy: 0, billing: 'monthly', type: 'fixed' },
   // DB
-  { name: 'Supabase Free', category: CATS.db, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Supabase Pro', category: CATS.db, monthlyJpy: 3750, type: 'fixed' },
-  { name: 'Neon Free', category: CATS.db, monthlyJpy: 0, type: 'fixed' },
-  { name: 'Neon Launch', category: CATS.db, monthlyJpy: 2850, type: 'fixed' },
-  // Domain
-  { name: '.com ドメイン', category: CATS.domain, monthlyJpy: 150, type: 'per_client' },
-  { name: '.jp ドメイン', category: CATS.domain, monthlyJpy: 350, type: 'per_client' },
-  // Legacy
-  { name: 'Xserver スタンダード', category: CATS.legacy, monthlyJpy: 990, type: 'per_client' },
-  { name: 'ConoHa WING ベーシック', category: CATS.legacy, monthlyJpy: 1210, type: 'per_client' },
+  { name: 'Supabase Free', category: CATS.db, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Supabase Pro', category: CATS.db, amountJpy: 3750, billing: 'monthly', type: 'fixed' },
+  { name: 'Neon Free', category: CATS.db, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+  { name: 'Neon Launch', category: CATS.db, amountJpy: 2850, billing: 'monthly', type: 'fixed' },
+  // Domain (corrected to yearly billing — domains are billed yearly, not monthly)
+  { name: '.com ドメイン', category: CATS.domain, amountJpy: 1500, billing: 'yearly', type: 'per_client' },
+  { name: '.jp ドメイン', category: CATS.domain, amountJpy: 3500, billing: 'yearly', type: 'per_client' },
+  { name: '.co.jp ドメイン', category: CATS.domain, amountJpy: 4500, billing: 'yearly', type: 'per_client' },
+  // Legacy hosting
+  { name: 'Xserver スタンダード (月払)', category: CATS.legacy, amountJpy: 1100, billing: 'monthly', type: 'per_client' },
+  { name: 'Xserver スタンダード (年払)', category: CATS.legacy, amountJpy: 11880, billing: 'yearly', type: 'per_client' },
+  { name: 'ConoHa WING ベーシック', category: CATS.legacy, amountJpy: 1210, billing: 'monthly', type: 'per_client' },
   // Ops
-  { name: 'WordPress 保守工数', category: CATS.ops, monthlyJpy: 2000, type: 'per_client' },
-  { name: 'WordPress セキュリティ', category: CATS.ops, monthlyJpy: 1000, type: 'per_client' },
-  { name: 'バックアップサービス', category: CATS.ops, monthlyJpy: 500, type: 'per_client' },
+  { name: 'WordPress 保守工数', category: CATS.ops, amountJpy: 2000, billing: 'monthly', type: 'per_client' },
+  { name: 'WordPress セキュリティ更新', category: CATS.ops, amountJpy: 1000, billing: 'monthly', type: 'per_client' },
+  { name: 'バックアップサービス', category: CATS.ops, amountJpy: 500, billing: 'monthly', type: 'per_client' },
 ]
 
 // ============================================================
@@ -76,7 +92,9 @@ const LIB: Omit<CostItem, 'id'>[] = [
 const uid = () => Math.random().toString(36).slice(2, 10)
 const yen = (n: number) => '¥' + Math.round(n).toLocaleString()
 const pct = (n: number) => (Math.round(n * 10) / 10).toFixed(1) + '%'
-const months = (n: number) => n === Infinity ? '回収不可' : `${(Math.round(n * 10) / 10).toFixed(1)}ヶ月`
+
+const billingLabel = (b: Billing) => b === 'one_time' ? '一括' : b === 'monthly' ? '月額' : '年額'
+const billingSuffix = (b: Billing) => b === 'one_time' ? '/ 一括' : b === 'monthly' ? '/ 月' : '/ 年'
 
 // ============================================================
 // DEFAULT SCENARIOS
@@ -86,29 +104,31 @@ function makeDefaults(): Scenario[] {
   return [
     {
       id: 'default-claude',
-      name: 'Claude Build (Vercel + Sanity)',
+      name: 'MGCプラン (Claude + Vercel + Sanity)',
       monthlyFeePerClient: 8000,
-      initialBuildCost: 20000,
+      initialFeeFromClient: 80000,
       contractMonths: 24,
       costs: [
-        { id: uid(), name: 'Vercel Pro (月払い)', category: CATS.hosting, monthlyJpy: 3000, type: 'fixed' },
-        { id: uid(), name: 'Sanity Free', category: CATS.cms, monthlyJpy: 0, type: 'fixed' },
-        { id: uid(), name: '.com ドメイン', category: CATS.domain, monthlyJpy: 150, type: 'per_client' },
+        { id: uid(), name: '人件費 - 小規模LP（AI支援）', category: CATS.labor, amountJpy: 40000, billing: 'one_time', type: 'per_client' },
+        { id: uid(), name: 'Vercel Pro (月払い)', category: CATS.hosting, amountJpy: 3000, billing: 'monthly', type: 'fixed' },
+        { id: uid(), name: 'Sanity Free', category: CATS.cms, amountJpy: 0, billing: 'monthly', type: 'fixed' },
+        { id: uid(), name: '.com ドメイン', category: CATS.domain, amountJpy: 1500, billing: 'yearly', type: 'per_client' },
       ],
       createdAt: now,
       updatedAt: now,
     },
     {
       id: 'default-wp',
-      name: 'WordPress Build (一般制作会社)',
+      name: 'WordPress制作会社プラン (一般相場)',
       monthlyFeePerClient: 10000,
-      initialBuildCost: 150000,
+      initialFeeFromClient: 150000,
       contractMonths: 24,
       costs: [
-        { id: uid(), name: 'Xserver スタンダード', category: CATS.legacy, monthlyJpy: 990, type: 'per_client' },
-        { id: uid(), name: '.jp ドメイン', category: CATS.domain, monthlyJpy: 350, type: 'per_client' },
-        { id: uid(), name: 'WordPress 保守工数', category: CATS.ops, monthlyJpy: 2000, type: 'per_client' },
-        { id: uid(), name: 'WordPress セキュリティ', category: CATS.ops, monthlyJpy: 1000, type: 'per_client' },
+        { id: uid(), name: '人件費 - 小規模LP（従来開発）', category: CATS.labor, amountJpy: 100000, billing: 'one_time', type: 'per_client' },
+        { id: uid(), name: 'Xserver スタンダード (月払)', category: CATS.legacy, amountJpy: 1100, billing: 'monthly', type: 'per_client' },
+        { id: uid(), name: '.jp ドメイン', category: CATS.domain, amountJpy: 3500, billing: 'yearly', type: 'per_client' },
+        { id: uid(), name: 'WordPress 保守工数', category: CATS.ops, amountJpy: 2000, billing: 'monthly', type: 'per_client' },
+        { id: uid(), name: 'WordPress セキュリティ更新', category: CATS.ops, amountJpy: 1000, billing: 'monthly', type: 'per_client' },
       ],
       createdAt: now,
       updatedAt: now,
@@ -117,9 +137,9 @@ function makeDefaults(): Scenario[] {
 }
 
 // ============================================================
-// STORAGE
+// STORAGE (v3 — bumped because data model changed)
 // ============================================================
-const STORAGE_KEY = 'lp-cost-validator-v1'
+const STORAGE_KEY = 'lp-cost-validator-v3'
 
 function loadScenarios(): Scenario[] {
   if (typeof window === 'undefined') return makeDefaults()
@@ -141,43 +161,69 @@ function persistScenarios(s: Scenario[]) {
 }
 
 // ============================================================
-// CALCULATIONS
+// CALCULATIONS — contract-total perspective, per client
 // ============================================================
-type CalcResult = {
-  fixedTotal: number
-  perClientTotal: number
-  monthlyRevenue: number
-  monthlyCost: number
-  monthlyProfit: number
-  profitPerClient: number
-  costPerClient: number
-  margin: number
-  recoupMonths: number
-  ltvRevenue: number
-  ltvCostPerClient: number
-  ltvProfitPerClient: number
-  totalLtvProfit: number
+type CostBreakdownRow = {
+  item: CostItem
+  contractTotal: number  // total cost over the entire contract for ONE client
 }
 
-function calc(s: Scenario, n: number): CalcResult {
-  const fixedTotal = s.costs.filter(c => c.type === 'fixed').reduce((a, c) => a + c.monthlyJpy, 0)
-  const perClientTotal = s.costs.filter(c => c.type === 'per_client').reduce((a, c) => a + c.monthlyJpy, 0)
-  const monthlyRevenue = s.monthlyFeePerClient * n
-  const monthlyCost = fixedTotal + perClientTotal * n
-  const monthlyProfit = monthlyRevenue - monthlyCost
-  const profitPerClient = n > 0 ? monthlyProfit / n : 0
-  const costPerClient = n > 0 ? monthlyCost / n : 0
-  const margin = monthlyRevenue > 0 ? (monthlyProfit / monthlyRevenue) * 100 : 0
-  const recoupMonths = profitPerClient > 0 ? s.initialBuildCost / profitPerClient : Infinity
-  const ltvRevenue = s.monthlyFeePerClient * s.contractMonths
-  const ltvCostPerClient = costPerClient * s.contractMonths + s.initialBuildCost
-  const ltvProfitPerClient = ltvRevenue - ltvCostPerClient
-  const totalLtvProfit = ltvProfitPerClient * n
+type CalcResult = {
+  // Revenue (what the client pays)
+  initialFee: number               // upfront
+  monthlyFee: number               // per month
+  contractRevenue: number          // initialFee + monthlyFee * months
+  // Cost (what the provider actually spends per client)
+  costRows: CostBreakdownRow[]
+  contractCost: number             // sum of all contractTotal
+  // Profit
+  contractProfit: number           // contractRevenue - contractCost
+  margin: number                   // contractProfit / contractRevenue * 100
+  // Monthly equivalents (for secondary display)
+  monthlyRevenueEq: number         // contractRevenue / months
+  monthlyCostEq: number            // contractCost / months
+  monthlyProfitEq: number          // contractProfit / months
+}
+
+function costContractTotal(c: CostItem, contractMonths: number): number {
+  // Step 1: how much money flows out over the contract for ONE share
+  let totalForShare = 0
+  if (c.billing === 'one_time') {
+    totalForShare = c.amountJpy
+  } else if (c.billing === 'monthly') {
+    totalForShare = c.amountJpy * contractMonths
+  } else {
+    // yearly
+    totalForShare = c.amountJpy * (contractMonths / 12)
+  }
+  // Step 2: divide by ASSUMED_CLIENT_SHARE if it's a fixed (shared) cost
+  if (c.type === 'fixed') {
+    return totalForShare / ASSUMED_CLIENT_SHARE
+  }
+  return totalForShare
+}
+
+function calc(s: Scenario): CalcResult {
+  const months = Math.max(s.contractMonths, 1)
+  const costRows: CostBreakdownRow[] = s.costs.map(item => ({
+    item,
+    contractTotal: costContractTotal(item, months),
+  }))
+  const contractCost = costRows.reduce((a, r) => a + r.contractTotal, 0)
+  const contractRevenue = s.initialFeeFromClient + s.monthlyFeePerClient * months
+  const contractProfit = contractRevenue - contractCost
+  const margin = contractRevenue > 0 ? (contractProfit / contractRevenue) * 100 : 0
   return {
-    fixedTotal, perClientTotal,
-    monthlyRevenue, monthlyCost, monthlyProfit,
-    profitPerClient, costPerClient, margin, recoupMonths,
-    ltvRevenue, ltvCostPerClient, ltvProfitPerClient, totalLtvProfit,
+    initialFee: s.initialFeeFromClient,
+    monthlyFee: s.monthlyFeePerClient,
+    contractRevenue,
+    costRows,
+    contractCost,
+    contractProfit,
+    margin,
+    monthlyRevenueEq: contractRevenue / months,
+    monthlyCostEq: contractCost / months,
+    monthlyProfitEq: contractProfit / months,
   }
 }
 
@@ -186,17 +232,14 @@ function calc(s: Scenario, n: number): CalcResult {
 // ============================================================
 export default function Page() {
   const [hydrated, setHydrated] = useState(false)
-  const [tab, setTab] = useState<'scenario' | 'compare'>('scenario')
-  const [advanced, setAdvanced] = useState(false)
+  const [tab, setTab] = useState<'compare' | 'scenario'>('compare')
   const [scenarios, setScenarios] = useState<Scenario[]>(makeDefaults)
   const [currentId, setCurrentId] = useState<string>('default-claude')
-  const [numClients, setNumClients] = useState(10)
   const [editMode, setEditMode] = useState(false)
   const [showLib, setShowLib] = useState(false)
   const [compareLeftId, setCompareLeftId] = useState<string>('default-claude')
   const [compareRightId, setCompareRightId] = useState<string>('default-wp')
 
-  // Hydrate from localStorage on mount
   useEffect(() => {
     const loaded = loadScenarios()
     setScenarios(loaded)
@@ -208,13 +251,12 @@ export default function Page() {
     setHydrated(true)
   }, [])
 
-  // Persist on changes (only after hydration to avoid stomping localStorage with defaults)
   useEffect(() => {
     if (hydrated) persistScenarios(scenarios)
   }, [scenarios, hydrated])
 
   const current = scenarios.find(s => s.id === currentId) || scenarios[0]
-  const result = useMemo(() => current ? calc(current, numClients) : null, [current, numClients])
+  const result = useMemo(() => current ? calc(current) : null, [current])
 
   const updateCurrent = (patch: Partial<Scenario>) => {
     setScenarios(scenarios.map(s => s.id === currentId ? { ...s, ...patch, updatedAt: Date.now() } : s))
@@ -242,9 +284,9 @@ export default function Page() {
   const newScenario = () => {
     const s: Scenario = {
       id: uid(),
-      name: '新しいシナリオ',
+      name: '新しいプラン',
       monthlyFeePerClient: 8000,
-      initialBuildCost: 20000,
+      initialFeeFromClient: 80000,
       contractMonths: 24,
       costs: [],
       createdAt: Date.now(),
@@ -278,7 +320,7 @@ export default function Page() {
   }
 
   const resetDefaults = () => {
-    if (!window.confirm('全シナリオを初期状態にリセットしますか？保存されたデータは消えます。')) return
+    if (!window.confirm('全プランを初期状態にリセットしますか？保存されたデータは消えます。')) return
     const d = makeDefaults()
     setScenarios(d)
     setCurrentId(d[0].id)
@@ -290,8 +332,8 @@ export default function Page() {
 
   const leftScenario = scenarios.find(s => s.id === compareLeftId) || current
   const rightScenario = scenarios.find(s => s.id === compareRightId) || current
-  const leftResult = calc(leftScenario, numClients)
-  const rightResult = calc(rightScenario, numClients)
+  const leftResult = calc(leftScenario)
+  const rightResult = calc(rightScenario)
 
   // Group library by category for the picker
   const libByCategory: Record<string, Omit<CostItem, 'id'>[]> = {}
@@ -304,23 +346,13 @@ export default function Page() {
     <div className="min-h-screen bg-background text-foreground">
       <div className="max-w-2xl mx-auto px-4 py-8">
         {/* Header */}
-        <h1 className="text-2xl font-bold mb-1">LP コスト検証ツール</h1>
+        <h1 className="text-2xl font-bold mb-1">透明な料金プラン</h1>
         <p className="text-sm text-muted-foreground mb-6">
-          月額制LP事業の実コスト・利益を試算。シナリオを保存して「比較」タブで2つを並べて検証。
+          月額料金がどこに使われているか、当社の利益はいくらか、WordPress制作会社と比べてどれだけ安いか — すべて公開します。
         </p>
 
         {/* Tabs */}
         <div className="flex gap-1 mb-4 border-b">
-          <button
-            onClick={() => setTab('scenario')}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-              tab === 'scenario'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            シナリオ作成
-          </button>
           <button
             onClick={() => setTab('compare')}
             className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
@@ -329,59 +361,84 @@ export default function Page() {
                 : 'border-transparent text-muted-foreground hover:text-foreground'
             }`}
           >
-            比較
+            比較する
+          </button>
+          <button
+            onClick={() => setTab('scenario')}
+            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
+              tab === 'scenario'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            プランを編集
           </button>
         </div>
 
-        {/* Advanced toggle (always visible) */}
-        <div className="flex items-center justify-between mb-4 px-1">
-          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={advanced}
-              onChange={e => setAdvanced(e.target.checked)}
-              className="rounded"
-            />
-            詳細モード（初期費用・LTV・回収月数を表示）
-          </label>
-          {tab === 'scenario' && (
-            <button onClick={resetDefaults} className="text-[10px] text-muted-foreground hover:text-destructive">
-              初期状態にリセット
-            </button>
-          )}
-        </div>
+        {/* ============================================================ */}
+        {/* COMPARE TAB */}
+        {/* ============================================================ */}
+        {tab === 'compare' && (
+          <>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wider font-semibold">プラン A</p>
+                <select
+                  value={compareLeftId}
+                  onChange={e => setCompareLeftId(e.target.value)}
+                  className="w-full px-2 py-2 rounded-lg border bg-card text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wider font-semibold">プラン B</p>
+                <select
+                  value={compareRightId}
+                  onChange={e => setCompareRightId(e.target.value)}
+                  className="w-full px-2 py-2 rounded-lg border bg-card text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <ScenarioCard scenario={leftScenario} result={leftResult} accent="emerald" />
+              <ScenarioCard scenario={rightScenario} result={rightResult} accent="amber" />
+            </div>
+
+            <SavingsCallout left={leftScenario} right={rightScenario} leftResult={leftResult} rightResult={rightResult} />
+
+            <div className="mt-4">
+              <CompareTable
+                left={leftScenario}
+                right={rightScenario}
+                leftResult={leftResult}
+                rightResult={rightResult}
+              />
+            </div>
+
+            <div className="px-4 py-3 rounded-xl bg-secondary/50 text-xs text-muted-foreground leading-relaxed mt-4">
+              <span className="font-semibold text-foreground">💡 透明性について:</span>{' '}
+              すべての金額はクライアント1社あたりの実コストです。固定インフラ（Vercel Proなど）は当社の{ASSUMED_CLIENT_SHARE}社運用想定で按分しています。年額コスト（ドメインなど）は契約期間に応じて計算しています。
+            </div>
+          </>
+        )}
 
         {/* ============================================================ */}
-        {/* SCENARIO TAB */}
+        {/* SCENARIO EDIT TAB */}
         {/* ============================================================ */}
         {tab === 'scenario' && (
           <>
-            {/* Scenario selector */}
             <div className="bg-card rounded-xl border p-4 mb-4">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  保存済みシナリオ
-                </span>
+                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">保存済みプラン</span>
                 <div className="flex gap-1">
-                  <button
-                    onClick={newScenario}
-                    className="px-2 py-1 rounded-md text-xs border hover:bg-secondary"
-                  >
-                    + 新規
-                  </button>
-                  <button
-                    onClick={duplicateScenario}
-                    className="px-2 py-1 rounded-md text-xs border hover:bg-secondary"
-                  >
-                    複製
-                  </button>
+                  <button onClick={newScenario} className="px-2 py-1 rounded-md text-xs border hover:bg-secondary">+ 新規</button>
+                  <button onClick={duplicateScenario} className="px-2 py-1 rounded-md text-xs border hover:bg-secondary">複製</button>
                   {scenarios.length > 1 && (
-                    <button
-                      onClick={deleteScenario}
-                      className="px-2 py-1 rounded-md text-xs border text-destructive hover:bg-destructive/10"
-                    >
-                      削除
-                    </button>
+                    <button onClick={deleteScenario} className="px-2 py-1 rounded-md text-xs border text-destructive hover:bg-destructive/10">削除</button>
                   )}
                 </div>
               </div>
@@ -390,28 +447,36 @@ export default function Page() {
                 onChange={e => setCurrentId(e.target.value)}
                 className="w-full px-3 py-2 rounded-lg border bg-card text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
-                {scenarios.map(s => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
+                {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
               <input
                 value={current.name}
                 onChange={e => updateCurrent({ name: e.target.value })}
-                placeholder="シナリオ名"
+                placeholder="プラン名"
                 className="w-full mt-2 px-3 py-2 rounded-lg border bg-card text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
-              <p className="text-[10px] text-muted-foreground mt-1.5">
-                変更は自動的にブラウザに保存されます（localStorage）
-              </p>
+              <p className="text-[10px] text-muted-foreground mt-1.5">変更は自動的にブラウザに保存されます（localStorage）</p>
             </div>
 
-            {/* Inputs */}
+            {/* Customer-paid fees */}
             <div className="bg-card rounded-xl border p-4 mb-4">
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">お客様の支払い</p>
               <div className="grid grid-cols-1 gap-3">
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1">
-                    月額料金（クライアント1件あたり）
-                  </label>
+                  <label className="text-xs text-muted-foreground block mb-1">初期費用（一括）</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">¥</span>
+                    <input
+                      type="number"
+                      value={current.initialFeeFromClient}
+                      onChange={e => updateCurrent({ initialFeeFromClient: parseInt(e.target.value) || 0 })}
+                      className="flex-1 px-3 py-2 rounded-lg border text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">/ 一括</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">月額料金</label>
                   <div className="flex items-center gap-2">
                     <span className="text-sm">¥</span>
                     <input
@@ -423,48 +488,24 @@ export default function Page() {
                     <span className="text-xs text-muted-foreground">/ 月</span>
                   </div>
                 </div>
-                {advanced && (
-                  <>
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">
-                        初期構築コスト（労務）
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm">¥</span>
-                        <input
-                          type="number"
-                          value={current.initialBuildCost}
-                          onChange={e => updateCurrent({ initialBuildCost: parseInt(e.target.value) || 0 })}
-                          className="flex-1 px-3 py-2 rounded-lg border text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring"
-                        />
-                        <span className="text-xs text-muted-foreground">/ 件</span>
-                      </div>
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        0円初期費用モデルで自社が負担する構築労務コスト
-                      </p>
-                    </div>
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">契約期間</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          value={current.contractMonths}
-                          onChange={e => updateCurrent({ contractMonths: parseInt(e.target.value) || 1 })}
-                          className="flex-1 px-3 py-2 rounded-lg border text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring"
-                        />
-                        <span className="text-xs text-muted-foreground">ヶ月</span>
-                      </div>
-                    </div>
-                  </>
-                )}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">契約期間</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={current.contractMonths}
+                      onChange={e => updateCurrent({ contractMonths: parseInt(e.target.value) || 1 })}
+                      className="flex-1 px-3 py-2 rounded-lg border text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">ヶ月</span>
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Cost items section header */}
             <div className="flex items-center justify-between mb-2 px-1">
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                コスト項目
-              </span>
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">事業者側のコスト</span>
               <div className="flex gap-1">
                 <button
                   onClick={() => setShowLib(!showLib)}
@@ -490,9 +531,7 @@ export default function Page() {
               <div className="bg-card rounded-xl border p-3 mb-3 max-h-96 overflow-y-auto">
                 {Object.entries(libByCategory).map(([cat, items]) => (
                   <div key={cat} className="mb-3 last:mb-0">
-                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">
-                      {cat}
-                    </p>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">{cat}</p>
                     <div className="space-y-1">
                       {items.map((item, i) => (
                         <button
@@ -500,20 +539,13 @@ export default function Page() {
                           onClick={() => addCost(item)}
                           className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs hover:bg-secondary text-left"
                         >
-                          <span className="flex items-center gap-2 min-w-0">
+                          <span className="flex items-center gap-2 min-w-0 flex-1">
                             <span className="font-medium truncate">{item.name}</span>
-                            <span
-                              className={`text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 ${
-                                item.type === 'fixed'
-                                  ? 'bg-emerald-100 text-emerald-700'
-                                  : 'bg-amber-100 text-amber-700'
-                              }`}
-                            >
-                              {item.type === 'fixed' ? '固定' : '従量'}
-                            </span>
+                            <BillingBadge billing={item.billing} />
+                            <TypeBadge type={item.type} />
                           </span>
                           <span className="text-muted-foreground flex-shrink-0">
-                            {yen(item.monthlyJpy)}/月
+                            {yen(item.amountJpy)}{billingSuffix(item.billing)}
                           </span>
                         </button>
                       ))}
@@ -522,7 +554,7 @@ export default function Page() {
                 ))}
                 <button
                   onClick={() =>
-                    addCost({ name: '新しい項目', category: 'カスタム', monthlyJpy: 0, type: 'fixed' })
+                    addCost({ name: '新しい項目', category: 'カスタム', amountJpy: 0, billing: 'monthly', type: 'fixed' })
                   }
                   className="w-full mt-2 py-2 rounded-lg border border-dashed text-xs text-muted-foreground hover:border-primary hover:text-primary"
                 >
@@ -532,7 +564,7 @@ export default function Page() {
             )}
 
             {/* Cost items list */}
-            <div className="space-y-2 mb-6">
+            <div className="space-y-2 mb-4">
               {current.costs.length === 0 && (
                 <div className="text-center py-6 text-xs text-muted-foreground bg-card rounded-xl border border-dashed">
                   コスト項目がありません。「ライブラリから追加」ボタンから追加してください。
@@ -541,56 +573,60 @@ export default function Page() {
               {current.costs.map((c, i) => (
                 <div key={c.id} className="bg-card rounded-xl border p-3">
                   {editMode ? (
-                    <div className="flex items-center gap-2 flex-wrap">
+                    <div className="space-y-2">
                       <input
                         value={c.name}
                         onChange={e => updateCost(i, { name: e.target.value })}
-                        className="flex-1 min-w-[120px] px-2 py-1.5 rounded-lg border text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring"
+                        className="w-full px-2 py-1.5 rounded-lg border text-sm bg-card focus:outline-none focus:ring-2 focus:ring-ring"
                       />
-                      <select
-                        value={c.type}
-                        onChange={e => updateCost(i, { type: e.target.value as CostType })}
-                        className="px-2 py-1.5 rounded-lg border text-xs bg-card focus:outline-none focus:ring-2 focus:ring-ring"
-                      >
-                        <option value="fixed">固定</option>
-                        <option value="per_client">従量</option>
-                      </select>
-                      <span className="text-xs">¥</span>
-                      <input
-                        type="number"
-                        value={c.monthlyJpy}
-                        onChange={e => updateCost(i, { monthlyJpy: parseInt(e.target.value) || 0 })}
-                        className="w-24 px-2 py-1.5 rounded-lg border text-sm text-right bg-card focus:outline-none focus:ring-2 focus:ring-ring"
-                      />
-                      <button
-                        onClick={() => deleteCost(i)}
-                        className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                        aria-label="削除"
-                      >
-                        ✕
-                      </button>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <select
+                          value={c.billing}
+                          onChange={e => updateCost(i, { billing: e.target.value as Billing })}
+                          className="px-2 py-1.5 rounded-lg border text-xs bg-card focus:outline-none focus:ring-2 focus:ring-ring"
+                        >
+                          <option value="one_time">一括</option>
+                          <option value="monthly">月額</option>
+                          <option value="yearly">年額</option>
+                        </select>
+                        <select
+                          value={c.type}
+                          onChange={e => updateCost(i, { type: e.target.value as CostType })}
+                          className="px-2 py-1.5 rounded-lg border text-xs bg-card focus:outline-none focus:ring-2 focus:ring-ring"
+                        >
+                          <option value="fixed">固定（按分）</option>
+                          <option value="per_client">従量（1社毎）</option>
+                        </select>
+                        <span className="text-xs">¥</span>
+                        <input
+                          type="number"
+                          value={c.amountJpy}
+                          onChange={e => updateCost(i, { amountJpy: parseInt(e.target.value) || 0 })}
+                          className="w-24 px-2 py-1.5 rounded-lg border text-sm text-right bg-card focus:outline-none focus:ring-2 focus:ring-ring"
+                        />
+                        <button
+                          onClick={() => deleteCost(i)}
+                          className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 ml-auto"
+                          aria-label="削除"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="flex items-center gap-3">
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="text-sm font-semibold">{c.name}</span>
-                          <span
-                            className={`text-[9px] px-1.5 py-0.5 rounded ${
-                              c.type === 'fixed'
-                                ? 'bg-emerald-100 text-emerald-700'
-                                : 'bg-amber-100 text-amber-700'
-                            }`}
-                          >
-                            {c.type === 'fixed' ? '固定' : '従量'}
-                          </span>
+                          <BillingBadge billing={c.billing} />
+                          <TypeBadge type={c.type} />
                         </div>
                         <p className="text-[10px] text-muted-foreground">{c.category}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold">{yen(c.monthlyJpy)}</p>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-semibold">{yen(c.amountJpy)}</p>
                         <p className="text-[10px] text-muted-foreground">
-                          {c.type === 'fixed' ? '/ 月（合計固定）' : '/ 月 / 件'}
+                          {billingSuffix(c.billing)}{c.type === 'fixed' ? ` ÷${ASSUMED_CLIENT_SHARE}社` : ''}
                         </p>
                       </div>
                     </div>
@@ -599,294 +635,17 @@ export default function Page() {
               ))}
             </div>
 
-            {/* Slider */}
-            <div className="mb-6">
-              <div className="flex justify-between items-baseline mb-1">
-                <span className="text-sm text-muted-foreground">クライアント数</span>
-                <span className="text-lg font-semibold">{numClients} 件</span>
-              </div>
-              <input
-                type="range"
-                min={1}
-                max={100}
-                step={1}
-                value={numClients}
-                onChange={e => setNumClients(parseInt(e.target.value))}
-                className="w-full accent-primary"
-              />
-              <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                <span>1件</span>
-                <span>25件</span>
-                <span>50件</span>
-                <span>75件</span>
-                <span>100件</span>
-              </div>
+            <div className="flex justify-end mb-4">
+              <button onClick={resetDefaults} className="text-[10px] text-muted-foreground hover:text-destructive">
+                初期状態にリセット
+              </button>
             </div>
 
-            {/* Result cards */}
-            <div className="grid grid-cols-3 gap-3 mb-4">
-              <div className="bg-emerald-50 dark:bg-emerald-950 rounded-xl p-3 text-center">
-                <p className="text-[10px] text-emerald-700 dark:text-emerald-300 mb-1">月額売上</p>
-                <p className="text-lg font-semibold text-emerald-800 dark:text-emerald-200">
-                  {yen(result.monthlyRevenue)}
-                </p>
-                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
-                  {numClients}件 × {yen(current.monthlyFeePerClient)}
-                </p>
-              </div>
-              <div className="bg-amber-50 dark:bg-amber-950 rounded-xl p-3 text-center">
-                <p className="text-[10px] text-amber-700 dark:text-amber-300 mb-1">月額コスト</p>
-                <p className="text-lg font-semibold text-amber-800 dark:text-amber-200">
-                  {yen(result.monthlyCost)}
-                </p>
-                <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
-                  固定 + 従量 × {numClients}
-                </p>
-              </div>
-              <div className="bg-violet-50 dark:bg-violet-950 rounded-xl p-3 text-center">
-                <p className="text-[10px] text-violet-700 dark:text-violet-300 mb-1">月額利益</p>
-                <p
-                  className={`text-lg font-semibold ${
-                    result.monthlyProfit >= 0
-                      ? 'text-violet-800 dark:text-violet-200'
-                      : 'text-destructive'
-                  }`}
-                >
-                  {yen(result.monthlyProfit)}
-                </p>
-                <p className="text-[10px] text-violet-600 dark:text-violet-400 mt-0.5">
-                  利益率 {pct(result.margin)}
-                </p>
-              </div>
-            </div>
-
-            {/* Revenue split bar */}
-            <div className="mb-4">
-              <p className="text-xs text-muted-foreground mb-2">売上の内訳</p>
-              <div className="h-7 rounded-lg bg-secondary/50 flex overflow-hidden">
-                {result.monthlyRevenue > 0 && result.monthlyCost > 0 && (
-                  <div
-                    className="bg-amber-300 dark:bg-amber-700 flex items-center justify-center text-[10px] font-medium text-amber-900 dark:text-amber-100 transition-all"
-                    style={{
-                      width: `${Math.max(
-                        Math.min((result.monthlyCost / result.monthlyRevenue) * 100, 100),
-                        0
-                      )}%`,
-                    }}
-                  >
-                    コスト {pct((result.monthlyCost / Math.max(result.monthlyRevenue, 1)) * 100)}
-                  </div>
-                )}
-                {result.monthlyProfit > 0 && (
-                  <div className="bg-violet-300 dark:bg-violet-700 flex items-center justify-center text-[10px] font-medium text-violet-900 dark:text-violet-100 transition-all flex-1">
-                    利益 {pct(result.margin)}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Per-client breakdown (advanced) */}
-            {advanced && (
-              <div className="bg-card rounded-xl border overflow-hidden mb-4">
-                <div className="px-3 py-2 bg-secondary/50 text-xs font-semibold">
-                  クライアント1件あたりの経済性
-                </div>
-                <div className="grid grid-cols-2 gap-px bg-border">
-                  <div className="bg-card p-3">
-                    <p className="text-[10px] text-muted-foreground mb-0.5">月額コスト/件</p>
-                    <p className="text-sm font-semibold">{yen(result.costPerClient)}</p>
-                    <p className="text-[9px] text-muted-foreground">固定費を{numClients}件で按分</p>
-                  </div>
-                  <div className="bg-card p-3">
-                    <p className="text-[10px] text-muted-foreground mb-0.5">月額利益/件</p>
-                    <p
-                      className={`text-sm font-semibold ${
-                        result.profitPerClient >= 0 ? '' : 'text-destructive'
-                      }`}
-                    >
-                      {yen(result.profitPerClient)}
-                    </p>
-                    <p className="text-[9px] text-muted-foreground">利益率 {pct(result.margin)}</p>
-                  </div>
-                  <div className="bg-card p-3">
-                    <p className="text-[10px] text-muted-foreground mb-0.5">初期費用回収月数</p>
-                    <p
-                      className={`text-sm font-semibold ${
-                        result.recoupMonths < current.contractMonths ? '' : 'text-destructive'
-                      }`}
-                    >
-                      {months(result.recoupMonths)}
-                    </p>
-                    <p className="text-[9px] text-muted-foreground">
-                      {yen(current.initialBuildCost)} ÷ 月利益
-                    </p>
-                  </div>
-                  <div className="bg-card p-3">
-                    <p className="text-[10px] text-muted-foreground mb-0.5">LTV売上/件</p>
-                    <p className="text-sm font-semibold">{yen(result.ltvRevenue)}</p>
-                    <p className="text-[9px] text-muted-foreground">
-                      {current.contractMonths}ヶ月契約想定
-                    </p>
-                  </div>
-                  <div className="bg-card p-3 col-span-2">
-                    <p className="text-[10px] text-muted-foreground mb-0.5">
-                      契約期間中の純利益/件
-                    </p>
-                    <p
-                      className={`text-base font-bold ${
-                        result.ltvProfitPerClient >= 0 ? 'text-violet-700' : 'text-destructive'
-                      }`}
-                    >
-                      {yen(result.ltvProfitPerClient)}
-                    </p>
-                    <p className="text-[9px] text-muted-foreground">
-                      {numClients}件の合計利益:{' '}
-                      <span className="font-semibold text-foreground">
-                        {yen(result.totalLtvProfit)}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Cost breakdown table */}
-            <div className="bg-card rounded-xl border overflow-hidden mb-4">
-              <div className="grid grid-cols-12 gap-0 px-3 py-2 bg-secondary/50 text-[10px] font-medium text-muted-foreground">
-                <span className="col-span-5">項目</span>
-                <span className="col-span-2">種別</span>
-                <span className="col-span-2 text-right">単価</span>
-                <span className="col-span-3 text-right">月額合計</span>
-              </div>
-              {current.costs.map(c => {
-                const total = c.type === 'fixed' ? c.monthlyJpy : c.monthlyJpy * numClients
-                return (
-                  <div
-                    key={c.id}
-                    className="grid grid-cols-12 gap-0 px-3 py-2 text-xs border-t items-center"
-                  >
-                    <span className="col-span-5 truncate">{c.name}</span>
-                    <span className="col-span-2 text-muted-foreground">
-                      {c.type === 'fixed' ? '固定' : '従量'}
-                    </span>
-                    <span className="col-span-2 text-right">{yen(c.monthlyJpy)}</span>
-                    <span className="col-span-3 text-right font-medium">{yen(total)}</span>
-                  </div>
-                )
-              })}
-              <div className="grid grid-cols-12 gap-0 px-3 py-2.5 text-xs border-t font-semibold bg-amber-50/50 dark:bg-amber-950/50">
-                <span className="col-span-7">月額コスト合計</span>
-                <span className="col-span-2"></span>
-                <span className="col-span-3 text-right">{yen(result.monthlyCost)}</span>
-              </div>
-              <div className="grid grid-cols-12 gap-0 px-3 py-2.5 text-xs border-t font-semibold bg-emerald-50/50 dark:bg-emerald-950/50">
-                <span className="col-span-7">月額売上合計</span>
-                <span className="col-span-2"></span>
-                <span className="col-span-3 text-right">{yen(result.monthlyRevenue)}</span>
-              </div>
-              <div className="grid grid-cols-12 gap-0 px-3 py-2.5 text-xs border-t font-bold bg-violet-50/50 dark:bg-violet-950/50">
-                <span className="col-span-7">月額利益（粗利）</span>
-                <span className="col-span-2"></span>
-                <span
-                  className={`col-span-3 text-right ${
-                    result.monthlyProfit >= 0 ? 'text-violet-800' : 'text-destructive'
-                  }`}
-                >
-                  {yen(result.monthlyProfit)}
-                </span>
-              </div>
-            </div>
-
-            <div className="px-4 py-3 rounded-xl bg-secondary/50 text-xs text-muted-foreground leading-relaxed mb-4">
-              <span className="font-semibold text-foreground">💡 ポイント:</span>{' '}
-              「固定」コスト（Vercel Proなど）はクライアント数で按分されるため、件数が増えるほど1件あたりの実コストが下がります。スライダーで件数を動かして利益率の変化を確認してください。
-            </div>
-          </>
-        )}
-
-        {/* ============================================================ */}
-        {/* COMPARE TAB */}
-        {/* ============================================================ */}
-        {tab === 'compare' && (
-          <>
-            {/* Shared client count slider */}
-            <div className="mb-6">
-              <div className="flex justify-between items-baseline mb-1">
-                <span className="text-sm text-muted-foreground">比較時のクライアント数</span>
-                <span className="text-lg font-semibold">{numClients} 件</span>
-              </div>
-              <input
-                type="range"
-                min={1}
-                max={100}
-                step={1}
-                value={numClients}
-                onChange={e => setNumClients(parseInt(e.target.value))}
-                className="w-full accent-primary"
-              />
-              <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                <span>1件</span>
-                <span>25件</span>
-                <span>50件</span>
-                <span>75件</span>
-                <span>100件</span>
-              </div>
-            </div>
-
-            {/* Two scenario selectors */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div>
-                <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wider font-semibold">
-                  シナリオ A
-                </p>
-                <select
-                  value={compareLeftId}
-                  onChange={e => setCompareLeftId(e.target.value)}
-                  className="w-full px-2 py-2 rounded-lg border bg-card text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                >
-                  {scenarios.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-wider font-semibold">
-                  シナリオ B
-                </p>
-                <select
-                  value={compareRightId}
-                  onChange={e => setCompareRightId(e.target.value)}
-                  className="w-full px-2 py-2 rounded-lg border bg-card text-xs focus:outline-none focus:ring-2 focus:ring-ring"
-                >
-                  {scenarios.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Result cards (mini) for both */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <CompareMiniCard scenario={leftScenario} result={leftResult} />
-              <CompareMiniCard scenario={rightScenario} result={rightResult} />
-            </div>
-
-            {/* Comparison table */}
-            <CompareTable
-              left={leftScenario}
-              right={rightScenario}
-              leftResult={leftResult}
-              rightResult={rightResult}
-              advanced={advanced}
-            />
+            <BreakdownCard scenario={current} result={result} />
 
             <div className="px-4 py-3 rounded-xl bg-secondary/50 text-xs text-muted-foreground leading-relaxed mt-4">
-              <span className="font-semibold text-foreground">💡 ポイント:</span>{' '}
-              同じクライアント数で2つのビジネスモデルを並べて比較できます。緑色の数値が「より良い」側を示します。シナリオは「シナリオ作成」タブで編集・追加してください。
+              <span className="font-semibold text-foreground">💡 計算方法:</span>{' '}
+              一括 = そのまま、月額 = 契約期間で乗算、年額 = 契約年数で乗算。固定コストは{ASSUMED_CLIENT_SHARE}社で按分。各項目を「一括／月額／年額」と「固定／従量」で分類できます。
             </div>
           </>
         )}
@@ -900,61 +659,106 @@ export default function Page() {
 }
 
 // ============================================================
-// COMPARE TAB COMPONENTS
+// SMALL UI HELPERS
 // ============================================================
-function CompareMiniCard({ scenario, result }: { scenario: Scenario; result: CalcResult }) {
+function BillingBadge({ billing }: { billing: Billing }) {
+  const cls = billing === 'one_time'
+    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+    : billing === 'yearly'
+      ? 'bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300'
+      : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+  return <span className={`text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 ${cls}`}>{billingLabel(billing)}</span>
+}
+
+function TypeBadge({ type }: { type: CostType }) {
+  const cls = type === 'fixed'
+    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+    : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+  return <span className={`text-[9px] px-1.5 py-0.5 rounded flex-shrink-0 ${cls}`}>{type === 'fixed' ? '固定' : '従量'}</span>
+}
+
+// ============================================================
+// SCENARIO CARD (compare tab, side-by-side)
+// ============================================================
+function ScenarioCard({ scenario, result, accent }: { scenario: Scenario; result: CalcResult; accent: 'emerald' | 'amber' }) {
+  const accentBg = accent === 'emerald' ? 'bg-emerald-50 dark:bg-emerald-950' : 'bg-amber-50 dark:bg-amber-950'
+  const accentText = accent === 'emerald' ? 'text-emerald-800 dark:text-emerald-200' : 'text-amber-800 dark:text-amber-200'
+  const accentSub = accent === 'emerald' ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'
   return (
-    <div className="bg-card rounded-xl border p-3">
-      <p className="text-xs font-semibold truncate mb-2">{scenario.name}</p>
-      <div className="space-y-1 text-[11px]">
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">売上</span>
-          <span className="font-medium">{yen(result.monthlyRevenue)}</span>
+    <div className={`rounded-xl border p-3 ${accentBg}`}>
+      <p className={`text-[11px] font-semibold mb-2 truncate ${accentSub}`}>{scenario.name}</p>
+      <div className="space-y-0.5 mb-2">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={`text-[10px] ${accentSub}`}>初期</span>
+          <span className={`text-sm font-semibold ${accentText}`}>{yen(result.initialFee)}</span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">コスト</span>
-          <span className="font-medium text-amber-700">{yen(result.monthlyCost)}</span>
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={`text-[10px] ${accentSub}`}>月額</span>
+          <span className={`text-sm font-semibold ${accentText}`}>{yen(result.monthlyFee)}</span>
         </div>
-        <div className="flex justify-between border-t pt-1">
-          <span className="text-muted-foreground">利益</span>
-          <span
-            className={`font-bold ${
-              result.monthlyProfit >= 0 ? 'text-violet-700' : 'text-destructive'
-            }`}
-          >
-            {yen(result.monthlyProfit)}
+      </div>
+      <div className="border-t pt-2 space-y-0.5">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={`text-[10px] ${accentSub}`}>{scenario.contractMonths}ヶ月総額</span>
+          <span className={`text-base font-bold ${accentText}`}>{yen(result.contractRevenue)}</span>
+        </div>
+        <div className="flex items-baseline justify-between gap-2 text-[10px]">
+          <span className={accentSub}>事業者の利益</span>
+          <span className={result.contractProfit >= 0 ? 'font-semibold' : 'text-destructive font-semibold'}>
+            {yen(result.contractProfit)} ({pct(result.margin)})
           </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted-foreground">利益率</span>
-          <span className="font-medium">{pct(result.margin)}</span>
         </div>
       </div>
     </div>
   )
 }
 
-function CompareTable({
-  left,
-  right,
-  leftResult,
-  rightResult,
-  advanced,
-}: {
-  left: Scenario
-  right: Scenario
-  leftResult: CalcResult
-  rightResult: CalcResult
-  advanced: boolean
-}) {
-  const Row = ({
-    label,
-    l,
-    r,
-    highlight,
-    format = yen,
-    betterIs = 'higher',
-  }: {
+// ============================================================
+// SAVINGS CALLOUT
+// ============================================================
+function SavingsCallout({ left, right, leftResult, rightResult }: { left: Scenario; right: Scenario; leftResult: CalcResult; rightResult: CalcResult }) {
+  const diff = rightResult.contractRevenue - leftResult.contractRevenue
+  if (Math.abs(diff) < 1) {
+    return (
+      <div className="rounded-xl border-2 border-dashed p-4 text-center text-xs text-muted-foreground">
+        2つのプランの総額は同じです
+      </div>
+    )
+  }
+  const cheaperName = diff > 0 ? left.name : right.name
+  const expensiveName = diff > 0 ? right.name : left.name
+  const cheaperMonths = diff > 0 ? left.contractMonths : right.contractMonths
+  const absTotal = Math.abs(diff)
+  const monthlyEquiv = absTotal / cheaperMonths
+
+  return (
+    <div className="rounded-xl border-2 border-violet-300 dark:border-violet-700 bg-gradient-to-br from-violet-50 to-emerald-50 dark:from-violet-950 dark:to-emerald-950 p-4">
+      <p className="text-[10px] text-violet-700 dark:text-violet-300 uppercase tracking-wider font-semibold mb-1 text-center">
+        お客様のメリット
+      </p>
+      <p className="text-center text-xs text-muted-foreground mb-2">
+        <span className="font-semibold">{cheaperName}</span> なら
+      </p>
+      <div className="text-center mb-2">
+        <p className="text-3xl font-bold text-violet-800 dark:text-violet-200">
+          {yen(absTotal)} お得
+        </p>
+      </div>
+      <p className="text-center text-sm text-violet-700 dark:text-violet-300">
+        {cheaperMonths}ヶ月総額 ・ 月平均 <span className="font-bold">{yen(monthlyEquiv)}</span> の節約
+      </p>
+      <p className="text-[10px] text-muted-foreground mt-2 text-center">
+        ({expensiveName} 比)
+      </p>
+    </div>
+  )
+}
+
+// ============================================================
+// COMPARE TABLE (detailed side-by-side)
+// ============================================================
+function CompareTable({ left, right, leftResult, rightResult }: { left: Scenario; right: Scenario; leftResult: CalcResult; rightResult: CalcResult }) {
+  const Row = ({ label, l, r, highlight, format = yen, betterIs = 'lower' }: {
     label: string
     l: number | string
     r: number | string
@@ -967,123 +771,152 @@ function CompareTable({
     let lWin = false
     let rWin = false
     if (typeof l === 'number' && typeof r === 'number' && betterIs !== 'none') {
-      if (betterIs === 'higher') {
-        lWin = l > r
-        rWin = r > l
-      } else {
-        lWin = l < r
-        rWin = r < l
-      }
+      if (betterIs === 'higher') { lWin = l > r; rWin = r > l }
+      else { lWin = l < r; rWin = r < l }
     }
     return (
-      <div
-        className={`grid grid-cols-12 gap-0 px-3 py-2 text-xs border-t items-center ${
-          highlight ? 'bg-secondary/50 font-semibold' : ''
-        }`}
-      >
+      <div className={`grid grid-cols-12 gap-0 px-3 py-2 text-xs border-t items-center ${highlight ? 'bg-secondary/50 font-semibold' : ''}`}>
         <span className="col-span-4 text-muted-foreground">{label}</span>
-        <span className={`col-span-4 text-right ${lWin ? 'text-emerald-700 font-semibold' : ''}`}>
-          {lStr}
-        </span>
-        <span className={`col-span-4 text-right ${rWin ? 'text-emerald-700 font-semibold' : ''}`}>
-          {rStr}
-        </span>
+        <span className={`col-span-4 text-right ${lWin ? 'text-emerald-700 font-semibold' : ''}`}>{lStr}</span>
+        <span className={`col-span-4 text-right ${rWin ? 'text-emerald-700 font-semibold' : ''}`}>{rStr}</span>
       </div>
     )
   }
-
   return (
     <div className="bg-card rounded-xl border overflow-hidden">
       <div className="grid grid-cols-12 gap-0 px-3 py-2 bg-primary text-primary-foreground text-[10px] font-semibold">
-        <span className="col-span-4">指標</span>
+        <span className="col-span-4">詳細</span>
         <span className="col-span-4 text-right truncate">{left.name}</span>
         <span className="col-span-4 text-right truncate">{right.name}</span>
       </div>
-      <Row
-        label="月額料金/件"
-        l={left.monthlyFeePerClient}
-        r={right.monthlyFeePerClient}
-        betterIs="none"
-      />
-      <Row
-        label="月額売上"
-        l={leftResult.monthlyRevenue}
-        r={rightResult.monthlyRevenue}
-        betterIs="higher"
-      />
-      <Row
-        label="月額コスト"
-        l={leftResult.monthlyCost}
-        r={rightResult.monthlyCost}
-        betterIs="lower"
-      />
-      <Row
-        label="月額利益"
-        l={leftResult.monthlyProfit}
-        r={rightResult.monthlyProfit}
-        betterIs="higher"
-        highlight
-      />
-      <Row
-        label="利益率"
-        l={pct(leftResult.margin)}
-        r={pct(rightResult.margin)}
-        betterIs="none"
-      />
-      <Row
-        label="月額コスト/件"
-        l={leftResult.costPerClient}
-        r={rightResult.costPerClient}
-        betterIs="lower"
-      />
-      <Row
-        label="月額利益/件"
-        l={leftResult.profitPerClient}
-        r={rightResult.profitPerClient}
-        betterIs="higher"
-      />
-      {advanced && (
-        <>
-          <Row
-            label="初期費用/件"
-            l={left.initialBuildCost}
-            r={right.initialBuildCost}
-            betterIs="lower"
-          />
-          <Row
-            label="契約期間"
-            l={`${left.contractMonths}ヶ月`}
-            r={`${right.contractMonths}ヶ月`}
-            betterIs="none"
-          />
-          <Row
-            label="回収月数"
-            l={months(leftResult.recoupMonths)}
-            r={months(rightResult.recoupMonths)}
-            betterIs="none"
-          />
-          <Row
-            label="LTV売上/件"
-            l={leftResult.ltvRevenue}
-            r={rightResult.ltvRevenue}
-            betterIs="higher"
-          />
-          <Row
-            label="LTV純利益/件"
-            l={leftResult.ltvProfitPerClient}
-            r={rightResult.ltvProfitPerClient}
-            betterIs="higher"
-            highlight
-          />
-          <Row
-            label="総LTV利益"
-            l={leftResult.totalLtvProfit}
-            r={rightResult.totalLtvProfit}
-            betterIs="higher"
-            highlight
-          />
-        </>
-      )}
+
+      <div className="px-3 py-1.5 bg-secondary/30 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-t">
+        お客様の支払い
+      </div>
+      <Row label="初期費用" l={leftResult.initialFee} r={rightResult.initialFee} betterIs="lower" />
+      <Row label="月額料金" l={leftResult.monthlyFee} r={rightResult.monthlyFee} betterIs="lower" />
+      <Row label="契約期間" l={`${left.contractMonths}ヶ月`} r={`${right.contractMonths}ヶ月`} betterIs="none" />
+      <Row label="支払総額" l={leftResult.contractRevenue} r={rightResult.contractRevenue} betterIs="lower" highlight />
+
+      <div className="px-3 py-1.5 bg-secondary/30 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-t">
+        事業者の実コスト（契約期間総額）
+      </div>
+      <Row label="コスト総額" l={leftResult.contractCost} r={rightResult.contractCost} betterIs="none" />
+      <Row label="事業者の利益" l={leftResult.contractProfit} r={rightResult.contractProfit} betterIs="none" />
+      <Row label="利益率" l={pct(leftResult.margin)} r={pct(rightResult.margin)} betterIs="none" />
+    </div>
+  )
+}
+
+// ============================================================
+// BREAKDOWN CARD (scenario edit tab — full transparent breakdown)
+// ============================================================
+function BreakdownCard({ scenario, result }: { scenario: Scenario; result: CalcResult }) {
+  // Group cost rows by billing for display
+  const oneTimeRows = result.costRows.filter(r => r.item.billing === 'one_time')
+  const monthlyRows = result.costRows.filter(r => r.item.billing === 'monthly')
+  const yearlyRows = result.costRows.filter(r => r.item.billing === 'yearly')
+
+  return (
+    <div className="bg-card rounded-xl border overflow-hidden">
+      <div className="px-3 py-2 bg-secondary/50 text-xs font-semibold">
+        透明な内訳（お客様1社あたり / {scenario.contractMonths}ヶ月契約総額）
+      </div>
+
+      {/* Customer payment breakdown */}
+      <div className="p-3 space-y-1.5 border-b">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+          お客様の支払い
+        </p>
+        <div className="flex justify-between text-xs">
+          <span className="text-muted-foreground">初期費用（一括）</span>
+          <span>{yen(result.initialFee)}</span>
+        </div>
+        <div className="flex justify-between text-xs">
+          <span className="text-muted-foreground">月額料金 {yen(result.monthlyFee)} × {scenario.contractMonths}ヶ月</span>
+          <span>{yen(result.monthlyFee * scenario.contractMonths)}</span>
+        </div>
+        <div className="flex justify-between text-xs font-semibold border-t pt-1.5 mt-1">
+          <span>支払総額</span>
+          <span className="text-emerald-700 dark:text-emerald-300">{yen(result.contractRevenue)}</span>
+        </div>
+      </div>
+
+      {/* Provider cost breakdown */}
+      <div className="p-3 space-y-2 border-b">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+          事業者の実コスト
+        </p>
+
+        {oneTimeRows.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[9px] text-muted-foreground uppercase tracking-wider">一括コスト</p>
+            {oneTimeRows.map((row, i) => (
+              <CostRow key={i} row={row} contractMonths={scenario.contractMonths} />
+            ))}
+          </div>
+        )}
+
+        {monthlyRows.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[9px] text-muted-foreground uppercase tracking-wider">月額コスト</p>
+            {monthlyRows.map((row, i) => (
+              <CostRow key={i} row={row} contractMonths={scenario.contractMonths} />
+            ))}
+          </div>
+        )}
+
+        {yearlyRows.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[9px] text-muted-foreground uppercase tracking-wider">年額コスト</p>
+            {yearlyRows.map((row, i) => (
+              <CostRow key={i} row={row} contractMonths={scenario.contractMonths} />
+            ))}
+          </div>
+        )}
+
+        <div className="flex justify-between text-xs font-semibold border-t pt-1.5 mt-1">
+          <span>コスト総額</span>
+          <span className="text-amber-700 dark:text-amber-300">{yen(result.contractCost)}</span>
+        </div>
+      </div>
+
+      {/* Profit reveal */}
+      <div className="p-3 flex justify-between items-baseline">
+        <div>
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider">事業者の利益（{scenario.contractMonths}ヶ月総額）</p>
+          <p className="text-[10px] text-muted-foreground">利益率 {pct(result.margin)} ・ 月平均 {yen(result.monthlyProfitEq)}</p>
+        </div>
+        <span className={`text-2xl font-bold ${result.contractProfit >= 0 ? 'text-violet-700 dark:text-violet-300' : 'text-destructive'}`}>
+          {yen(result.contractProfit)}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function CostRow({ row, contractMonths }: { row: CostBreakdownRow; contractMonths: number }) {
+  const c = row.item
+  let detail = ''
+  if (c.billing === 'one_time') {
+    detail = c.type === 'fixed' ? `${yen(c.amountJpy)} ÷${ASSUMED_CLIENT_SHARE}社` : `${yen(c.amountJpy)} 一括`
+  } else if (c.billing === 'monthly') {
+    detail = c.type === 'fixed'
+      ? `${yen(c.amountJpy)}/月 × ${contractMonths}ヶ月 ÷${ASSUMED_CLIENT_SHARE}社`
+      : `${yen(c.amountJpy)}/月 × ${contractMonths}ヶ月`
+  } else {
+    const years = (contractMonths / 12).toFixed(1).replace(/\.0$/, '')
+    detail = c.type === 'fixed'
+      ? `${yen(c.amountJpy)}/年 × ${years}年 ÷${ASSUMED_CLIENT_SHARE}社`
+      : `${yen(c.amountJpy)}/年 × ${years}年`
+  }
+  return (
+    <div className="flex justify-between items-baseline text-xs gap-2">
+      <div className="min-w-0 flex-1">
+        <p className="truncate">{c.name}</p>
+        <p className="text-[9px] text-muted-foreground truncate">{detail}</p>
+      </div>
+      <span className="flex-shrink-0">{yen(row.contractTotal)}</span>
     </div>
   )
 }
