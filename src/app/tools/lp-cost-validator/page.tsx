@@ -106,8 +106,8 @@ function makeDefaults(): Scenario[] {
       id: 'default-claude',
       name: 'MGCプラン (Claude + Vercel + Sanity)',
       monthlyFeePerClient: 8000,
-      initialFeeFromClient: 80000,
-      contractMonths: 24,
+      initialFeeFromClient: 0,
+      contractMonths: 6,
       costs: [
         { id: uid(), name: '人件費 - 小規模LP（AI支援）', category: CATS.labor, amountJpy: 40000, billing: 'one_time', type: 'per_client' },
         { id: uid(), name: 'Vercel Pro (月払い)', category: CATS.hosting, amountJpy: 3000, billing: 'monthly', type: 'fixed' },
@@ -121,7 +121,7 @@ function makeDefaults(): Scenario[] {
       id: 'default-wp',
       name: 'WordPress制作会社プラン (一般相場)',
       monthlyFeePerClient: 10000,
-      initialFeeFromClient: 150000,
+      initialFeeFromClient: 80000,
       contractMonths: 24,
       costs: [
         { id: uid(), name: '人件費 - 小規模LP（従来開発）', category: CATS.labor, amountJpy: 100000, billing: 'one_time', type: 'per_client' },
