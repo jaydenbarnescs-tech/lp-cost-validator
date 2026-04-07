@@ -717,19 +717,28 @@ function ScenarioCard({ scenario, result, accent }: { scenario: Scenario; result
 // SAVINGS CALLOUT
 // ============================================================
 function SavingsCallout({ left, right, leftResult, rightResult }: { left: Scenario; right: Scenario; leftResult: CalcResult; rightResult: CalcResult }) {
-  const diff = rightResult.contractRevenue - leftResult.contractRevenue
-  if (Math.abs(diff) < 1) {
+  // 異なる契約期間でも公平に比較できるよう月額換算で計算
+  const leftMonthlyEq = leftResult.contractRevenue / left.contractMonths
+  const rightMonthlyEq = rightResult.contractRevenue / right.contractMonths
+  const monthlyDiff = rightMonthlyEq - leftMonthlyEq
+
+  if (Math.abs(monthlyDiff) < 1) {
     return (
       <div className="rounded-xl border-2 border-dashed p-4 text-center text-xs text-muted-foreground">
-        2つのプランの総額は同じです
+        2つのプランの月額換算は同じです
       </div>
     )
   }
-  const cheaperName = diff > 0 ? left.name : right.name
-  const expensiveName = diff > 0 ? right.name : left.name
-  const cheaperMonths = diff > 0 ? left.contractMonths : right.contractMonths
-  const absTotal = Math.abs(diff)
-  const monthlyEquiv = absTotal / cheaperMonths
+
+  const cheaper = monthlyDiff > 0 ? left : right
+  const expensive = monthlyDiff > 0 ? right : left
+  const monthlySavings = Math.abs(monthlyDiff)
+  const annualSavings = monthlySavings * 12
+
+  // 1年目の実支出差（0円初期費用モデルの強み）
+  const firstYearLeft = leftResult.initialFee + leftResult.monthlyFee * Math.min(12, left.contractMonths)
+  const firstYearRight = rightResult.initialFee + rightResult.monthlyFee * Math.min(12, right.contractMonths)
+  const firstYearSavings = Math.abs(firstYearRight - firstYearLeft)
 
   return (
     <div className="rounded-xl border-2 border-violet-300 dark:border-violet-700 bg-gradient-to-br from-violet-50 to-emerald-50 dark:from-violet-950 dark:to-emerald-950 p-4">
@@ -737,18 +746,27 @@ function SavingsCallout({ left, right, leftResult, rightResult }: { left: Scenar
         お客様のメリット
       </p>
       <p className="text-center text-xs text-muted-foreground mb-2">
-        <span className="font-semibold">{cheaperName}</span> なら
+        <span className="font-semibold">{cheaper.name}</span> なら
       </p>
-      <div className="text-center mb-2">
+      <div className="text-center mb-3">
         <p className="text-3xl font-bold text-violet-800 dark:text-violet-200">
-          {yen(absTotal)} お得
+          月々 {yen(monthlySavings)} お得
         </p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">月額換算 / {expensive.name}比</p>
       </div>
-      <p className="text-center text-sm text-violet-700 dark:text-violet-300">
-        {cheaperMonths}ヶ月総額 ・ 月平均 <span className="font-bold">{yen(monthlyEquiv)}</span> の節約
-      </p>
-      <p className="text-[10px] text-muted-foreground mt-2 text-center">
-        ({expensiveName} 比)
+      <div className="grid grid-cols-2 gap-2 pt-3 border-t border-violet-200 dark:border-violet-800">
+        <div className="text-center">
+          <p className="text-[10px] uppercase tracking-wider text-violet-700 dark:text-violet-300">年間で</p>
+          <p className="text-base font-bold text-violet-800 dark:text-violet-200">{yen(annualSavings)} お得</p>
+        </div>
+        <div className="text-center">
+          <p className="text-[10px] uppercase tracking-wider text-violet-700 dark:text-violet-300">1年目の出費</p>
+          <p className="text-base font-bold text-violet-800 dark:text-violet-200">{yen(firstYearSavings)} 少ない</p>
+        </div>
+      </div>
+      <p className="text-[9px] text-muted-foreground mt-3 text-center leading-relaxed">
+        ※ 契約期間が異なるため月額換算で比較<br/>
+        ({left.name}: {left.contractMonths}ヶ月 ／ {right.name}: {right.contractMonths}ヶ月)
       </p>
     </div>
   )
@@ -796,7 +814,9 @@ function CompareTable({ left, right, leftResult, rightResult }: { left: Scenario
       <Row label="初期費用" l={leftResult.initialFee} r={rightResult.initialFee} betterIs="lower" />
       <Row label="月額料金" l={leftResult.monthlyFee} r={rightResult.monthlyFee} betterIs="lower" />
       <Row label="契約期間" l={`${left.contractMonths}ヶ月`} r={`${right.contractMonths}ヶ月`} betterIs="none" />
-      <Row label="支払総額" l={leftResult.contractRevenue} r={rightResult.contractRevenue} betterIs="lower" highlight />
+      <Row label="月額換算" l={leftResult.monthlyRevenueEq} r={rightResult.monthlyRevenueEq} betterIs="lower" highlight />
+      <Row label="年間換算" l={leftResult.monthlyRevenueEq * 12} r={rightResult.monthlyRevenueEq * 12} betterIs="lower" />
+      <Row label="契約期間総額" l={leftResult.contractRevenue} r={rightResult.contractRevenue} betterIs="none" />
 
       <div className="px-3 py-1.5 bg-secondary/30 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider border-t">
         事業者の実コスト（契約期間総額）
